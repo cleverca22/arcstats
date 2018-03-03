@@ -4,7 +4,7 @@ let
   ghc = haskellPackages.ghcWithPackages (ps: with ps; [ (haskell.lib.dontCheck datadog) lens ]);
 in stdenv.mkDerivation {
   name = "arcstats";
-  buildInputs = [ ghc ];
+  buildInputs = [ ghc haskellPackages.ghcid ];
   src = lib.cleanSource ./.;
   buildPhase = ''
     mkdir $out/bin -p

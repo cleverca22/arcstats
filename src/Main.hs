@@ -1,6 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Main where
 
@@ -9,13 +12,33 @@ import           Data.Text.Encoding     (decodeUtf8)
 import           Data.Text              (splitOn, Text)
 import qualified Data.Text as T
 import           Data.Char              (isSpace)
+import           Data.Reflection        (Given, give, given)
 import           Data.Monoid            ( (<>) )
-import           Network.StatsD.Datadog (MetricName(MetricName), StatsClient, withDogStatsD, defaultSettings, send, event, metric, MetricType(Counter, Gauge))
+import           Network.StatsD.Datadog (MetricName(MetricName), StatsClient, withDogStatsD, defaultSettings, send, event, metric, MetricType(Counter, Gauge), ToMetricValue)
 import           Data.String            (IsString, fromString)
 import           Control.Concurrent     (threadDelay)
-import           Control.Monad          (forever)
+import           Control.Monad          (forever, when)
 import           Data.IORef             (IORef, newIORef, atomicModifyIORef)
 import           Control.Lens           (makeLenses, Lens', view, set)
+import           Data.Time              ()
+import           Data.Time.Clock.POSIX  (getPOSIXTime)
+import           Data.Data              ()
+
+type HasCounters = Given (IORef CounterHacks)
+
+withCounters :: IORef CounterHacks -> (HasCounters => r) -> r
+withCounters = give
+
+getCounters :: HasCounters => IORef CounterHacks
+getCounters = given
+
+type HasClient = Given StatsClient
+
+withClient :: StatsClient -> (HasClient => r) -> r
+withClient = give
+
+getClient :: HasClient => StatsClient
+getClient = given
 
 instance IsString MetricName where
   fromString = MetricName . T.pack
@@ -27,52 +50,53 @@ data CounterHacks = CounterHacks {
   , _demand_data_misses :: Int
   , _l2_hits            :: Int
   , _l2_misses          :: Int
-}
+  , _time :: Double
+} deriving (Show)
 
 makeLenses ''CounterHacks
 
 main :: IO ()
 main = do
-  counters <- newIORef $ CounterHacks 0 0 0 0 0 0
+  counters <- newIORef $ CounterHacks 0 0 0 0 0 0 0
   withDogStatsD defaultSettings $ \client -> do
     send client $ event "program start" "the program was started"
-    forever $ do
+    withCounters counters $ withClient client $ forever $ do
       raw <- BS.readFile "/proc/spl/kstat/zfs/arcstats"
       let coredata = filter (/= "") (drop 2 $ splitOn "\n" $ decodeUtf8 raw)
-      mapM_ (sendRowToEkg client counters . parseRow) coredata
+      mapM_ (sendRowToEkg . parseRow) coredata
+      now <- getPOSIXTime
+      doCounter "test.time" time (realToFrac now)
+      send client $ metric "test.fixed" Counter (1 :: Int)
       threadDelay (1000 * 1000 * 10)
 
-doCounter :: StatsClient -> MetricName -> Lens' CounterHacks Int -> IORef CounterHacks -> Int -> IO ()
-doCounter client name fn ref value = do
+doCounter :: forall a. (Real a, ToMetricValue a, HasCounters, HasClient) => MetricName -> Lens' CounterHacks a -> a -> IO ()
+doCounter name fn value = do
   let
-    modifier :: CounterHacks -> (CounterHacks, Maybe Int)
+    modifier :: CounterHacks -> (CounterHacks, Maybe a)
     modifier counters =
       if view fn counters == 0 then
         (set fn value counters, Nothing)
       else
         (set fn value counters, Just $ value - view fn counters)
-  diff' <- atomicModifyIORef ref modifier
+  diff' <- atomicModifyIORef getCounters modifier
   case diff' of
-    Just diff -> send client $ metric name Counter diff
+    Just diff -> send getClient $ metric name Counter diff
     Nothing -> pure ()
 
-sendRowToEkg :: StatsClient -> IORef CounterHacks -> (Text, Int) -> IO ()
-sendRowToEkg client counters (key, value) =
+sendRowToEkg :: HasClient => HasCounters => (Text, Int) -> IO ()
+sendRowToEkg (key, value) =
   case key of
-    "hits"               -> doCounter client "zfs.hits"               hits               counters value
-    "misses"             -> doCounter client "zfs.misses"             misses             counters value
-    "demand_data_hits"   -> doCounter client "zfs.demand_data_hits"   demand_data_hits   counters value
-    "demand_data_misses" -> doCounter client "zfs.demand_data_misses" demand_data_misses counters value
-    "l2_hits"            -> doCounter client "zfs.l2_hits"            l2_hits            counters value
-    "l2_misses"          -> doCounter client "zfs.l2_misses"          l2_misses          counters value
-    "l2_size"            -> send client $ metric "zfs.l2_size" Gauge value
-    "c"                  -> send client $ metric "zfs.c"       Gauge value
-    "size"               -> send client $ metric "zfs.size"    Gauge value
+    "hits"               -> doCounter "zfs.hits"               hits               value
+    "misses"             -> doCounter "zfs.misses"             misses             value
+    "demand_data_hits"   -> doCounter "zfs.demand_data_hits"   demand_data_hits   value
+    "demand_data_misses" -> doCounter "zfs.demand_data_misses" demand_data_misses value
+    "l2_hits"            -> doCounter "zfs.l2_hits"            l2_hits            value
+    "l2_misses"          -> doCounter "zfs.l2_misses"          l2_misses          value
+    "l2_size"            -> send getClient $ metric "zfs.l2_size" Gauge value
+    "c"                  -> send getClient $ metric "zfs.c"       Gauge value
+    "size"               -> send getClient $ metric "zfs.size"    Gauge value
     _ ->
-      if value == 0 then
-        pure ()
-      else
-        print $ "unhandled " <> key <> " " <> (T.pack $ show value)
+      when (value /= 0) $ print $ "unhandled " <> key <> " " <> (T.pack $ show value)
 
 parseRow :: Text -> (Text, Int)
 parseRow input =
