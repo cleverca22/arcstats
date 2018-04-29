@@ -1,7 +1,7 @@
-with import <nixpkgs> {};
+{ haskellPackages, haskell, stdenv, lib }:
 
 let
-  ghc = haskellPackages.ghcWithPackages (ps: with ps; [ (haskell.lib.dontCheck datadog) lens ]);
+  ghc = haskellPackages.ghcWithPackages (ps: with ps; [ (haskell.lib.dontCheck datadog) lens data-default ]);
 in stdenv.mkDerivation {
   name = "arcstats";
   buildInputs = [ ghc haskellPackages.ghcid ];
