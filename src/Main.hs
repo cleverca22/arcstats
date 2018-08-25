@@ -20,7 +20,7 @@ import           Network.StatsD.Datadog (MetricName(MetricName), StatsClient, wi
 import           Data.String            (IsString, fromString)
 import           Control.Concurrent     (threadDelay)
 import           Control.Monad          (forever, when)
-import           Data.IORef             (IORef, newIORef, atomicModifyIORef)
+import           Data.IORef             (IORef, newIORef, atomicModifyIORef')
 import           Control.Lens           (makeLenses, Lens', view, set)
 import           Data.Time.Clock.POSIX  (getPOSIXTime)
 import           System.Directory       (doesPathExist)
@@ -127,7 +127,7 @@ doCounter name' fn value = do
         (set fn value counters, Nothing)
       else
         (set fn value counters, Just $ value - view fn counters)
-  diff' <- atomicModifyIORef getCounters modifier
+  diff' <- atomicModifyIORef' getCounters modifier
   case diff' of
     Just diff -> send getClient $ metric name' Counter diff
     Nothing -> pure ()
@@ -167,7 +167,7 @@ doIoCounter current name' fn = do
         v3 = set fn value v
         hm' = HM.insert device v3 hm
       in (hm', change')
-  diff' <- atomicModifyIORef getIoCounters modifier
+  diff' <- atomicModifyIORef' getIoCounters modifier
   case diff' of
     Just diff -> send getClient $ (set tags) [ tag "dev" device ] $ metric name' Counter diff
     Nothing -> pure ()
