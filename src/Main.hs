@@ -208,5 +208,5 @@ parseIoRow input =
     parts = filter (/="") (T.split isSpace input)
     [ _major, _minor ] = map readNum $ take 2 parts
     [ _name ] = take 1 $ drop 2 parts
-    [ _reads, _read_merged, _read_sector, _mili_reading, _writes, _writes_merged, _write_sector, _mili_writing, _io_pending, _mili, _weighted_mili ] = map readNum $ drop 3 parts
+    _reads : _read_merged : _read_sector : _mili_reading : _writes : _writes_merged : _write_sector : _mili_writing : _io_pending : _mili : _weighted_mili : xs = map readNum $ drop 3 parts
   in IoStats{..}
