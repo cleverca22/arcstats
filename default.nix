@@ -1,7 +1,7 @@
 { haskellPackages, haskell, stdenv, lib }:
 
 let
-  ghc = haskellPackages.ghcWithPackages (ps: with ps; [ (haskell.lib.dontCheck datadog) lens data-default ]);
+  ghc = haskellPackages.ghcWithPackages (ps: with ps; [ (haskell.lib.dontCheck (ps.callHackage "datadog" "0.2.4.0" {})) lens data-default ]);
 in stdenv.mkDerivation {
   name = "arcstats";
   buildInputs = [ ghc haskellPackages.ghcid ];
